@@ -1,35 +1,95 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Image } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, Image, ActivityIndicator } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import Toast from "react-native-toast-message";
 import * as Haptics from "expo-haptics";
+import * as Location from "expo-location";
 import { useUser } from "../../src/context/UserContext";
 import { mockRestaurants, Restaurant, foodCategories, cities } from "../../src/data/restaurants";
 import { HeartIcon, CloseIcon, LocationIcon } from "../../src/components/Icons";
 import { SwipeCard } from "../../src/components/SwipeCard";
 import { LocationBottomSheet } from "../../src/components/LocationBottomSheet";
 import { FilterBottomSheet } from "../../src/components/FilterBottomSheet";
+import { supabase } from "../../src/lib/supabase";
 
 export default function Swipe() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [selectedCity, setSelectedCity] = useState("all");
   const [radius, setRadius] = useState(10);
-  const [restaurants, setRestaurants] = useState<Restaurant[]>(mockRestaurants);
+  const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [isLocationOpen, setIsLocationOpen] = useState(false);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const { saveRestaurant } = useUser();
   const insets = useSafeAreaInsets();
 
-  // Filter restaurants
-  useEffect(() => {
+  const fetchRestaurants = useCallback(async () => {
+    setIsLoading(true);
+    setCurrentIndex(0);
+    try {
+      const { status } = await Location.getForegroundPermissionsAsync();
+      if (status === "granted") {
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        const { data, error } = await supabase.functions.invoke("search-restaurants", {
+          body: {
+            lat: loc.coords.latitude,
+            lng: loc.coords.longitude,
+            radius,
+            category: selectedCategory,
+          },
+        });
+        if (!error && Array.isArray(data) && data.length > 0) {
+          setRestaurants(data);
+          return;
+        }
+      }
+    } catch {
+      // Fall through to cached / mock data
+    }
+
+    // Fallback: cached restaurants from Supabase DB
+    try {
+      let query = supabase.from("restaurants").select("*").limit(30);
+      if (selectedCategory !== "all") query = query.eq("category", selectedCategory);
+      const { data } = await query;
+      if (data && data.length > 0) {
+        const mapped: Restaurant[] = data.map((r: any) => ({
+          id: r.id,
+          name: r.name,
+          description: r.description ?? "",
+          address: r.address ?? "",
+          city: r.city ?? "",
+          distance: 0,
+          rating: r.rating ?? 0,
+          cuisine: r.cuisine ?? "",
+          tags: r.tags ?? [],
+          videoUrl: "",
+          thumbnailUrl: r.thumbnail_url ?? "",
+          lat: r.lat,
+          lng: r.lng,
+          hours: r.hours ?? {},
+          category: r.category ?? "american",
+          orderingServices: r.ordering_services ?? undefined,
+        }));
+        setRestaurants(mapped);
+        return;
+      }
+    } catch {
+      // Fall through to mock data
+    }
+
+    // Last resort: mock data (filtered)
     let filtered = mockRestaurants;
     if (selectedCategory !== "all") filtered = filtered.filter((r) => r.category === selectedCategory);
     if (selectedCity !== "all") filtered = filtered.filter((r) => r.city === selectedCity);
     setRestaurants(filtered);
-    setCurrentIndex(0);
-  }, [selectedCategory, selectedCity]);
+  }, [selectedCategory, selectedCity, radius]);
+
+  useEffect(() => {
+    fetchRestaurants().finally(() => setIsLoading(false));
+  }, [fetchRestaurants]);
 
   const currentRestaurant = useMemo(() => restaurants[currentIndex], [restaurants, currentIndex]);
   const nextRestaurant = useMemo(() => restaurants[currentIndex + 1], [restaurants, currentIndex]);
@@ -55,10 +115,27 @@ export default function Swipe() {
     moveToNext();
   }, [moveToNext]);
 
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#000" }}>
+        <ActivityIndicator color="#fff" size="large" />
+        <Text style={{ color: "rgba(255,255,255,0.6)", marginTop: 16, fontSize: 15 }}>
+          Finding restaurants...
+        </Text>
+      </View>
+    );
+  }
+
   if (!currentRestaurant) {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#000" }}>
-        <Text style={{ color: "white", fontSize: 18 }}>Loading...</Text>
+        <Text style={{ color: "white", fontSize: 18, marginBottom: 16 }}>No restaurants found</Text>
+        <TouchableOpacity
+          onPress={() => fetchRestaurants().finally(() => setIsLoading(false))}
+          style={{ backgroundColor: "#fff", borderRadius: 999, paddingVertical: 12, paddingHorizontal: 24 }}
+        >
+          <Text style={{ fontWeight: "600" }}>Try Again</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -109,19 +186,11 @@ export default function Swipe() {
 
         {/* TikTok-style right side action bar */}
         <View style={[styles.actionBar, { bottom: 100 + insets.bottom }]}>
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={handleSave}
-            activeOpacity={0.85}
-          >
+          <TouchableOpacity style={styles.actionButton} onPress={handleSave} activeOpacity={0.85}>
             <HeartIcon size={24} color="white" />
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={handleSkip}
-            activeOpacity={0.85}
-          >
+          <TouchableOpacity style={styles.actionButton} onPress={handleSkip} activeOpacity={0.85}>
             <CloseIcon size={20} color="white" />
           </TouchableOpacity>
 

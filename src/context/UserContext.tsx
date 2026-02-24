@@ -1,13 +1,21 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as SecureStore from "expo-secure-store";
+import { Session } from "@supabase/supabase-js";
+import * as AppleAuthentication from "expo-apple-authentication";
+import * as WebBrowser from "expo-web-browser";
+import { makeRedirectUri } from "expo-auth-session";
+import { supabase } from "../lib/supabase";
+import { getRestaurantById } from "../data/restaurants";
+
+WebBrowser.maybeCompleteAuthSession();
+
+// ---------- Types ----------
 
 export interface UserData {
   name: string;
   username: string;
   contact: string;
   contactType: "phone" | "email";
-  password: string;
+  password?: string; // Backward compat only — auth is handled by Supabase
   profilePhoto?: string;
   dietaryRestrictions: string[];
   foodPreferences: string[];
@@ -16,116 +24,329 @@ export interface UserData {
 }
 
 interface UserContextType {
+  session: Session | null;
   userData: UserData;
   isLoading: boolean;
-  updateUserData: (data: Partial<UserData>) => void;
-  saveRestaurant: (id: string) => void;
-  unsaveRestaurant: (id: string) => void;
+  updateUserData: (data: Partial<UserData>) => Promise<void>;
+  saveRestaurant: (id: string) => Promise<void>;
+  unsaveRestaurant: (id: string) => Promise<void>;
   rateRestaurant: (id: string, rating: number, review?: string) => Promise<void>;
+  getRating: (id: string) => Promise<{ rating: number; review?: string } | null>;
   isSaved: (id: string) => boolean;
   clearAllData: () => Promise<void>;
+  signUp: (email: string, password: string, name: string) => Promise<{ error: any }>;
+  signIn: (email: string, password: string) => Promise<{ error: any }>;
+  signOut: () => Promise<void>;
+  signInWithApple: () => Promise<{ error: any }>;
+  signInWithGoogle: () => Promise<{ error: any }>;
+  signInWithPhone: (phone: string) => Promise<{ error: any }>;
+  verifyOtp: (phone: string, token: string) => Promise<{ error: any }>;
 }
 
-const defaultUserData: UserData = {
+// ---------- Defaults ----------
+
+const defaultUserData: Omit<UserData, "savedRestaurants"> = {
   name: "",
   username: "",
   contact: "",
   contactType: "email",
-  password: "",
+  password: undefined,
   profilePhoto: undefined,
   dietaryRestrictions: [],
   foodPreferences: [],
-  savedRestaurants: [],
   completedOnboarding: false,
 };
 
 const UserContext = createContext<UserContextType | undefined>(undefined);
 
-export function UserProvider({ children }: { children: ReactNode }) {
-  const [userData, setUserData] = useState<UserData>(defaultUserData);
-  const [isLoading, setIsLoading] = useState(true);
+// ---------- Provider ----------
 
-  // Load data from storage on mount
+export function UserProvider({ children }: { children: ReactNode }) {
+  const [session, setSession] = useState<Session | null>(null);
+  const [savedRestaurants, setSavedRestaurants] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  // Optimistic local state — updated immediately on updateUserData, synced to Supabase in background
+  const [localData, setLocalData] = useState(defaultUserData);
+
+  // ---------- Session init ----------
+
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        const stored = await AsyncStorage.getItem("scillet-user-data");
-        const password = await SecureStore.getItemAsync("scillet-password");
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          setUserData({ ...parsed, password: password ?? "" });
-        }
-      } catch (e) {
-        // Storage read failed, use defaults
-      } finally {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) {
+        loadProfile(session.user.id, session.user.email, session.user.phone);
+      } else {
         setIsLoading(false);
       }
-    };
-    loadData();
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      setSession(session);
+      if (session) {
+        await loadProfile(session.user.id, session.user.email, session.user.phone);
+      } else {
+        setLocalData(defaultUserData);
+        setSavedRestaurants([]);
+        setIsLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  // Persist to storage whenever userData changes
-  useEffect(() => {
-    if (isLoading) return;
-    const persist = async () => {
-      try {
-        const { password, ...rest } = userData;
-        await AsyncStorage.setItem("scillet-user-data", JSON.stringify(rest));
-        if (password) {
-          await SecureStore.setItemAsync("scillet-password", password);
-        }
-      } catch (e) {
-        // Ignore storage errors
+  const loadProfile = async (
+    userId: string,
+    email?: string | null,
+    phone?: string | null
+  ) => {
+    try {
+      const [profileRes, savesRes] = await Promise.all([
+        supabase.from("profiles").select("*").eq("id", userId).single(),
+        supabase.from("saves").select("restaurant_id").eq("user_id", userId),
+      ]);
+
+      if (profileRes.data) {
+        const p = profileRes.data;
+        setLocalData({
+          name: p.full_name ?? "",
+          username: p.username ?? "",
+          contact: email ?? phone ?? "",
+          contactType: email ? "email" : "phone",
+          profilePhoto: p.avatar_url ?? undefined,
+          dietaryRestrictions: p.dietary_restrictions ?? [],
+          foodPreferences: p.food_preferences ?? [],
+          completedOnboarding: p.onboarding_completed ?? false,
+        });
+      } else {
+        // Profile row not yet created (trigger may be slow)
+        setLocalData((prev) => ({
+          ...prev,
+          contact: email ?? phone ?? "",
+          contactType: email ? "email" : "phone",
+        }));
       }
-    };
-    persist();
-  }, [userData, isLoading]);
 
-  const updateUserData = (data: Partial<UserData>) => {
-    setUserData((prev) => ({ ...prev, ...data }));
+      if (savesRes.data) {
+        setSavedRestaurants(savesRes.data.map((s: any) => s.restaurant_id));
+      }
+    } catch {
+      // Ignore — use defaults
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const saveRestaurant = (id: string) => {
-    setUserData((prev) => ({
-      ...prev,
-      savedRestaurants: [...prev.savedRestaurants, id],
-    }));
+  // ---------- Derived userData ----------
+
+  const userData: UserData = { ...localData, savedRestaurants };
+
+  // ---------- updateUserData ----------
+
+  const updateUserData = async (data: Partial<UserData>) => {
+    // Optimistic local update
+    setLocalData((prev) => {
+      const next = { ...prev };
+      if ("name" in data) next.name = data.name!;
+      if ("username" in data) next.username = data.username!;
+      if ("contact" in data) next.contact = data.contact!;
+      if ("contactType" in data) next.contactType = data.contactType!;
+      if ("profilePhoto" in data) next.profilePhoto = data.profilePhoto;
+      if ("dietaryRestrictions" in data) next.dietaryRestrictions = data.dietaryRestrictions!;
+      if ("foodPreferences" in data) next.foodPreferences = data.foodPreferences!;
+      if ("completedOnboarding" in data) next.completedOnboarding = data.completedOnboarding!;
+      return next;
+    });
+
+    // Sync to Supabase profile
+    if (!session) return;
+    const profileUpdate: Record<string, any> = {};
+    if ("name" in data) profileUpdate.full_name = data.name;
+    if ("username" in data) profileUpdate.username = data.username;
+    if ("profilePhoto" in data) profileUpdate.avatar_url = data.profilePhoto;
+    if ("dietaryRestrictions" in data) profileUpdate.dietary_restrictions = data.dietaryRestrictions;
+    if ("foodPreferences" in data) profileUpdate.food_preferences = data.foodPreferences;
+    if ("completedOnboarding" in data && data.completedOnboarding) {
+      profileUpdate.onboarding_completed = true;
+    }
+    if (Object.keys(profileUpdate).length > 0) {
+      await supabase.from("profiles").update(profileUpdate).eq("id", session.user.id);
+    }
   };
 
-  const unsaveRestaurant = (id: string) => {
-    setUserData((prev) => ({
-      ...prev,
-      savedRestaurants: prev.savedRestaurants.filter((r) => r !== id),
-    }));
+  // ---------- Restaurant helpers ----------
+
+  // Ensures a restaurant exists in the DB before writing a save/rating
+  const ensureRestaurantInDb = async (id: string) => {
+    const restaurant = getRestaurantById(id);
+    if (!restaurant) return;
+    await supabase.from("restaurants").upsert(
+      {
+        id: restaurant.id,
+        name: restaurant.name,
+        description: restaurant.description,
+        address: restaurant.address,
+        city: restaurant.city,
+        lat: restaurant.lat,
+        lng: restaurant.lng,
+        rating: restaurant.rating,
+        cuisine: restaurant.cuisine,
+        category: restaurant.category,
+        tags: restaurant.tags,
+        thumbnail_url: restaurant.thumbnailUrl,
+        hours: restaurant.hours,
+        ordering_services: restaurant.orderingServices ?? null,
+      },
+      { onConflict: "id" }
+    );
   };
+
+  // ---------- Saves ----------
+
+  const saveRestaurant = async (id: string) => {
+    if (!session) return;
+    setSavedRestaurants((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    await ensureRestaurantInDb(id);
+    await supabase.from("saves").insert({ user_id: session.user.id, restaurant_id: id });
+  };
+
+  const unsaveRestaurant = async (id: string) => {
+    if (!session) return;
+    setSavedRestaurants((prev) => prev.filter((r) => r !== id));
+    await supabase
+      .from("saves")
+      .delete()
+      .match({ user_id: session.user.id, restaurant_id: id });
+  };
+
+  const isSaved = (id: string) => savedRestaurants.includes(id);
+
+  // ---------- Ratings ----------
 
   const rateRestaurant = async (id: string, rating: number, review?: string) => {
+    if (!session) return;
+    await ensureRestaurantInDb(id);
+    await supabase.from("ratings").upsert(
+      { user_id: session.user.id, restaurant_id: id, rating, review },
+      { onConflict: "user_id,restaurant_id" }
+    );
+  };
+
+  const getRating = async (id: string) => {
+    if (!session) return null;
+    const { data } = await supabase
+      .from("ratings")
+      .select("rating, review")
+      .match({ user_id: session.user.id, restaurant_id: id })
+      .single();
+    return data ? { rating: data.rating, review: data.review } : null;
+  };
+
+  // ---------- Auth methods ----------
+
+  const signUp = async (email: string, password: string, name: string) => {
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { full_name: name } },
+    });
+    return { error };
+  };
+
+  const signIn = async (email: string, password: string) => {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    return { error };
+  };
+
+  const signOut = async () => {
+    await supabase.auth.signOut();
+  };
+
+  const signInWithApple = async () => {
     try {
-      const stored = await AsyncStorage.getItem("scillet-ratings");
-      const ratings = stored ? JSON.parse(stored) : {};
-      ratings[id] = { rating, review, date: new Date().toISOString() };
-      await AsyncStorage.setItem("scillet-ratings", JSON.stringify(ratings));
-    } catch (e) {
-      // Ignore storage errors
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+      if (!credential.identityToken) return { error: new Error("No identity token") };
+      const { error } = await supabase.auth.signInWithIdToken({
+        provider: "apple",
+        token: credential.identityToken,
+      });
+      return { error };
+    } catch (e: any) {
+      if (e.code === "ERR_REQUEST_CANCELED") return { error: null }; // User cancelled
+      return { error: e };
     }
   };
 
-  const isSaved = (id: string) => userData.savedRestaurants.includes(id);
-
-  const clearAllData = async () => {
+  const signInWithGoogle = async () => {
     try {
-      await AsyncStorage.removeItem("scillet-user-data");
-      await AsyncStorage.removeItem("scillet-ratings");
-      await SecureStore.deleteItemAsync("scillet-password");
-    } catch (e) {
-      // Ignore errors
+      const redirectUrl = makeRedirectUri({ scheme: "com.scillet.app" });
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: redirectUrl, skipBrowserRedirect: true },
+      });
+      if (error || !data.url) return { error: error ?? new Error("No OAuth URL") };
+
+      const result = await WebBrowser.openAuthSessionAsync(data.url, redirectUrl);
+      if (result.type === "success") {
+        const hash = result.url.split("#")[1] ?? result.url.split("?")[1] ?? "";
+        const params = new URLSearchParams(hash);
+        const accessToken = params.get("access_token");
+        const refreshToken = params.get("refresh_token");
+        if (accessToken) {
+          const { error: sessionError } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken ?? "",
+          });
+          return { error: sessionError };
+        }
+      }
+      return { error: null };
+    } catch (e: any) {
+      return { error: e };
     }
-    setUserData(defaultUserData);
   };
+
+  const signInWithPhone = async (phone: string) => {
+    const { error } = await supabase.auth.signInWithOtp({ phone });
+    return { error };
+  };
+
+  const verifyOtp = async (phone: string, token: string) => {
+    const { error } = await supabase.auth.verifyOtp({ phone, token, type: "sms" });
+    return { error };
+  };
+
+  const clearAllData = signOut;
+
+  // ---------- Context value ----------
 
   return (
     <UserContext.Provider
-      value={{ userData, isLoading, updateUserData, saveRestaurant, unsaveRestaurant, rateRestaurant, isSaved, clearAllData }}
+      value={{
+        session,
+        userData,
+        isLoading,
+        updateUserData,
+        saveRestaurant,
+        unsaveRestaurant,
+        rateRestaurant,
+        getRating,
+        isSaved,
+        clearAllData,
+        signUp,
+        signIn,
+        signOut,
+        signInWithApple,
+        signInWithGoogle,
+        signInWithPhone,
+        verifyOtp,
+      }}
     >
       {children}
     </UserContext.Provider>

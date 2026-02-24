@@ -6,7 +6,7 @@ import { StatusBar } from "expo-status-bar";
 import * as Linking from "expo-linking";
 import Toast from "react-native-toast-message";
 import * as Haptics from "expo-haptics";
-import { getRestaurantById, getRating } from "../../src/data/restaurants";
+import { getRestaurantById } from "../../src/data/restaurants";
 import { useUser } from "../../src/context/UserContext";
 import { ArrowLeftIcon, HeartIcon, StarIcon, LocationIcon, NavigationIcon, ShoppingBagIcon, CloseIcon } from "../../src/components/Icons";
 
@@ -22,7 +22,7 @@ export default function RestaurantDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { userData, saveRestaurant, unsaveRestaurant, rateRestaurant } = useUser();
+  const { userData, saveRestaurant, unsaveRestaurant, rateRestaurant, getRating } = useUser();
 
   const [showNavModal, setShowNavModal] = useState(false);
   const [showRatingModal, setShowRatingModal] = useState(false);

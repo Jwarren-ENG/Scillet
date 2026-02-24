@@ -1,46 +1,89 @@
-import { useState, useMemo } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView } from "react-native";
-import MapView, { Marker, PROVIDER_DEFAULT, Callout } from "react-native-maps";
+import { useState, useMemo, useCallback } from "react";
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from "react-native";
+import MapView, { Marker, PROVIDER_DEFAULT, Region } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { useRouter } from "expo-router";
 import { mockRestaurants, foodCategories, Restaurant } from "../../src/data/restaurants";
 import { StarIcon, LocationIcon, CloseIcon } from "../../src/components/Icons";
+import { supabase } from "../../src/lib/supabase";
 
 const getCurrentDay = () => {
   const days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
   return days[new Date().getDay()];
 };
 
+const SF_REGION: Region = {
+  latitude: 37.7749,
+  longitude: -122.4194,
+  latitudeDelta: 0.08,
+  longitudeDelta: 0.08,
+};
+
 export default function MapViewScreen() {
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
+  const [mapRestaurants, setMapRestaurants] = useState<Restaurant[]>(mockRestaurants);
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const currentDay = getCurrentDay();
 
-  const filteredRestaurants = useMemo(() => {
-    if (selectedCategory === "all") return mockRestaurants;
-    return mockRestaurants.filter((r) => r.category === selectedCategory);
+  const loadRestaurantsForRegion = useCallback(async (region: Region) => {
+    try {
+      let query = supabase
+        .from("restaurants")
+        .select("*")
+        .gte("lat", region.latitude - region.latitudeDelta)
+        .lte("lat", region.latitude + region.latitudeDelta)
+        .gte("lng", region.longitude - region.longitudeDelta)
+        .lte("lng", region.longitude + region.longitudeDelta)
+        .limit(50);
+      if (selectedCategory !== "all") query = query.eq("category", selectedCategory);
+
+      const { data } = await query;
+      if (data && data.length > 0) {
+        setMapRestaurants(
+          data.map((r: any) => ({
+            id: r.id,
+            name: r.name,
+            description: r.description ?? "",
+            address: r.address ?? "",
+            city: r.city ?? "",
+            distance: 0,
+            rating: r.rating ?? 0,
+            cuisine: r.cuisine ?? "",
+            tags: r.tags ?? [],
+            videoUrl: "",
+            thumbnailUrl: r.thumbnail_url ?? "",
+            lat: r.lat,
+            lng: r.lng,
+            hours: r.hours ?? {},
+            category: r.category ?? "american",
+            orderingServices: r.ordering_services ?? undefined,
+          }))
+        );
+      }
+    } catch {
+      // Keep existing data
+    }
   }, [selectedCategory]);
 
-  const currentDay = getCurrentDay();
+  const filteredRestaurants = useMemo(() => {
+    if (selectedCategory === "all") return mapRestaurants;
+    return mapRestaurants.filter((r) => r.category === selectedCategory);
+  }, [mapRestaurants, selectedCategory]);
 
   return (
     <View style={{ flex: 1 }}>
       <StatusBar style="dark" />
 
-      {/* Map */}
       <MapView
         provider={PROVIDER_DEFAULT}
         style={StyleSheet.absoluteFill}
-        initialRegion={{
-          latitude: 37.7749,
-          longitude: -122.4194,
-          latitudeDelta: 0.08,
-          longitudeDelta: 0.08,
-        }}
+        initialRegion={SF_REGION}
         showsUserLocation
         showsMyLocationButton
+        onRegionChangeComplete={loadRestaurantsForRegion}
       >
         {filteredRestaurants.map((restaurant) => (
           <Marker
@@ -66,30 +109,32 @@ export default function MapViewScreen() {
               activeOpacity={0.85}
             >
               <Text style={styles.filterEmoji}>{cat.emoji}</Text>
-              <Text style={[styles.filterText, selectedCategory === cat.id && { color: "#fff" }]}>{cat.label}</Text>
+              <Text style={[styles.filterText, selectedCategory === cat.id && { color: "#fff" }]}>
+                {cat.label}
+              </Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
       </View>
 
-      {/* Restaurant detail bottom sheet */}
+      {/* Restaurant bottom sheet */}
       {selectedRestaurant && (
         <View style={[styles.detailSheet, { paddingBottom: insets.bottom + 16 }]}>
-          <TouchableOpacity
-            style={styles.detailCloseButton}
-            onPress={() => setSelectedRestaurant(null)}
-          >
+          <TouchableOpacity style={styles.detailCloseButton} onPress={() => setSelectedRestaurant(null)}>
             <CloseIcon size={18} color="#000" />
           </TouchableOpacity>
 
           <View style={{ flex: 1 }}>
             <Text style={styles.detailName}>{selectedRestaurant.name}</Text>
             <Text style={styles.detailCuisine}>{selectedRestaurant.cuisine}</Text>
-
             <View style={styles.detailMeta}>
               <View style={styles.metaItem}>
                 <LocationIcon size={14} color="#888" />
-                <Text style={styles.metaText}>{selectedRestaurant.distance} mi away</Text>
+                <Text style={styles.metaText}>
+                  {selectedRestaurant.distance > 0
+                    ? `${selectedRestaurant.distance} mi away`
+                    : selectedRestaurant.address}
+                </Text>
               </View>
               <View style={styles.metaItem}>
                 <StarIcon size={14} color="#f59e0b" fill="#f59e0b" />

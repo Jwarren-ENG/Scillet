@@ -1,6 +1,6 @@
 import { Tabs } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { HomeIcon, MapIcon, SavedIcon, ProfileIcon } from "../../src/components/Icons";
+import { HomeIcon, MapIcon, SavedIcon, ProfileIcon, ActivityIcon } from "../../src/components/Icons";
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
@@ -39,6 +39,13 @@ export default function TabLayout() {
         options={{
           title: "Saved",
           tabBarIcon: ({ color }) => <SavedIcon size={24} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="activity"
+        options={{
+          title: "Activity",
+          tabBarIcon: ({ color }) => <ActivityIcon size={24} color={color} />,
         }}
       />
       <Tabs.Screen

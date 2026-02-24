@@ -37,7 +37,9 @@
         {
           "photosPermission": "Scillet accesses your photos to set a profile picture."
         }
-      ]
+      ],
+      "expo-web-browser",
+      "expo-apple-authentication"
     ]
   }
 }
