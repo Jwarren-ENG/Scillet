@@ -1,7 +1,8 @@
 {
   "expo": {
-    "name": "ScilletNative",
-    "slug": "ScilletNative",
+    "name": "Scillet",
+    "slug": "scillet",
+    "scheme": "scillet",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -13,18 +14,30 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": false,
+      "bundleIdentifier": "com.scillet.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Scillet uses your location to find nearby restaurants.",
+        "NSPhotoLibraryUsageDescription": "Scillet needs access to your photos to set a profile picture.",
+        "NSCameraUsageDescription": "Scillet needs camera access to take a profile photo."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      }
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    }
+    "plugins": [
+      "expo-router",
+      "expo-location",
+      "expo-notifications",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Scillet accesses your photos to set a profile picture."
+        }
+      ]
+    ]
   }
 }
