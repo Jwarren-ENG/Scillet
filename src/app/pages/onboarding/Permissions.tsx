@@ -11,13 +11,25 @@ export function Permissions() {
   const navigate = useNavigate();
 
   const handleEnableLocation = () => {
-    // In a real app, this would trigger native permission prompt
-    setLocationGranted(true);
+    if (!navigator.geolocation) {
+      setLocationGranted(true); // fallback if not supported
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      () => setLocationGranted(true),
+      () => setLocationGranted(true) // grant UI state even on deny so user can continue
+    );
   };
 
-  const handleEnableNotifications = () => {
-    // In a real app, this would trigger native permission prompt
-    setNotificationsGranted(true);
+  const handleEnableNotifications = async () => {
+    if (!("Notification" in window)) {
+      setNotificationsGranted(true);
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    if (permission === "granted" || permission === "denied") {
+      setNotificationsGranted(true); // mark as handled either way
+    }
   };
 
   const handleContinue = () => {

@@ -10,6 +10,7 @@ interface LocationModalProps {
   setSelectedCity: (city: string) => void;
   radius: number;
   setRadius: (radius: number) => void;
+  onLocationDetected: (loc: { lat: number; lng: number }) => void;
 }
 
 export function LocationModal({
@@ -19,7 +20,17 @@ export function LocationModal({
   setSelectedCity,
   radius,
   setRadius,
+  onLocationDetected,
 }: LocationModalProps) {
+  const handleCitySelect = (cityId: string) => {
+    setSelectedCity(cityId);
+    if (cityId === "current" && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => onLocationDetected({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => {} // silently fail — city filter won't apply
+      );
+    }
+  };
   const [searchQuery, setSearchQuery] = useState("");
 
   // Add "Current Location" as the first option - memoized
@@ -101,7 +112,7 @@ export function LocationModal({
                     <motion.button
                       key={city.id}
                       whileTap={{ scale: 0.98 }}
-                      onClick={() => setSelectedCity(city.id)}
+                      onClick={() => handleCitySelect(city.id)}
                       className={`p-4 rounded-2xl flex items-center gap-3 transition-all ${
                         selectedCity === city.id
                           ? "bg-black text-white shadow-lg"

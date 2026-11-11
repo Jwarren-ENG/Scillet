@@ -8,15 +8,28 @@ import { toast } from "sonner";
 import { LocationModal } from "../components/LocationModal";
 import { FilterModal } from "../components/FilterModal";
 
+function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const R = 3958.8; // Earth radius in miles
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 export function Swipe() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [selectedCity, setSelectedCity] = useState("all");
   const [radius, setRadius] = useState(10);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [restaurants, setRestaurants] = useState<Restaurant[]>(mockRestaurants);
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
-  const { saveRestaurant, userData } = useUser();
+  const { saveRestaurant, session, loading } = useUser();
   const navigate = useNavigate();
   const x = useMotionValue(0);
   const rotate = useTransform(x, [-200, 200], [-25, 25]);
@@ -25,29 +38,35 @@ export function Swipe() {
   const loveOpacity = useTransform(x, [0, 200], [0, 1]);
 
   useEffect(() => {
-    if (!userData.completedOnboarding) {
+    if (!session) {
       navigate("/");
     }
-  }, [userData.completedOnboarding, navigate]);
+  }, [session, navigate]);
 
-  // Filter restaurants based on selected category and city
+  // Filter restaurants based on selected category, city, and location
   useEffect(() => {
     let filtered = mockRestaurants;
-    
-    // Filter by category
+
     if (selectedCategory !== "all") {
       filtered = filtered.filter((r) => r.category === selectedCategory);
     }
-    
-    // Filter by city
-    if (selectedCity !== "all") {
+
+    if (selectedCity === "current" && userLocation) {
+      filtered = filtered
+        .map((r) => ({
+          ...r,
+          distance: Math.round(haversineDistance(userLocation.lat, userLocation.lng, r.lat, r.lng) * 10) / 10,
+        }))
+        .filter((r) => r.distance <= radius)
+        .sort((a, b) => a.distance - b.distance);
+    } else if (selectedCity !== "all") {
       filtered = filtered.filter((r) => r.city === selectedCity);
     }
-    
+
     setRestaurants(filtered);
     setCurrentIndex(0);
     x.set(0);
-  }, [selectedCategory, selectedCity, x]);
+  }, [selectedCategory, selectedCity, userLocation, radius, x]);
 
   const currentRestaurant = useMemo(() => restaurants[currentIndex], [restaurants, currentIndex]);
   const nextRestaurant = useMemo(() => restaurants[currentIndex + 1], [restaurants, currentIndex]);
@@ -89,6 +108,10 @@ export function Swipe() {
       x.set(0);
     }
   }, [handleSave, handleSkip, x]);
+
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  }
 
   if (!currentRestaurant) {
     return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
@@ -145,10 +168,15 @@ export function Swipe() {
           onDragEnd={handleDragEnd}
         >
           <div className="relative w-full h-full">
-            {/* Restaurant image/video - Full screen */}
-            <img
-              src={currentRestaurant.thumbnailUrl}
-              alt={currentRestaurant.name}
+            {/* Restaurant video - Full screen */}
+            <video
+              key={currentRestaurant.id}
+              src={currentRestaurant.videoUrl}
+              poster={currentRestaurant.thumbnailUrl}
+              autoPlay
+              loop
+              muted
+              playsInline
               className="w-full h-full object-cover"
             />
 
@@ -253,6 +281,7 @@ export function Swipe() {
         setSelectedCity={setSelectedCity}
         radius={radius}
         setRadius={setRadius}
+        onLocationDetected={setUserLocation}
       />
       <FilterModal
         isOpen={isFilterModalOpen}
